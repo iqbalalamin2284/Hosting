@@ -42,6 +42,7 @@ from crud import (
     get_batasan_wilayah, get_batasan_wilayah_by_id,
     get_batasan_wilayah_geojson, get_batasan_wilayah_geojson_by_id,
     get_batasan_wilayah_kabupaten_geojson,
+    get_batasan_wilayah_outliers,
     get_zonasi, get_zonasi_by_id, get_simulasi_ppdb, get_rekomendasi_sekolah,
     get_sekolah_dalam_radius,
     get_biaya, upsert_biaya,
@@ -372,6 +373,20 @@ def batasan_wilayah_kabupaten_geojson(db: Session = Depends(get_db)):
         if fresh:
             return cached
         return _compute_batasan_kabupaten_cache(db)
+
+
+@router.get("/batasan-wilayah-kabupaten/outliers")
+def batasan_wilayah_kabupaten_outliers(db: Session = Depends(get_db), _admin=Depends(require_admin)):
+    """
+    DIAGNOSTIK (admin only) — daftar baris desa/kelurahan di
+    `batasan_wilayah` yang kemungkinan salah label nama_kabupaten
+    (geometrinya nyasar, nggak nyambung ke badan utama kabupaten/kota
+    yang sama). Buka endpoint ini utk dapetin daftar id + nama_desa
+    yang perlu dicek & dikoreksi manual di Supabase Table Editor —
+    ini penyebab garis batas wilayah di peta sempat kelihatan pecah/
+    ada potongan nyasar terpisah jauh dari badan utamanya.
+    """
+    return get_batasan_wilayah_outliers(db)
 
 
 @router.get("/batasan-wilayah/{boundary_id}", response_model=BatasanWilayahResponse)
