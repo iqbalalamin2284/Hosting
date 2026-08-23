@@ -2,6 +2,8 @@ import json
 import os
 import requests as _requests
 import re
+import time
+import threading
 from typing import Optional
 from datetime import datetime, timedelta
 
@@ -302,6 +304,39 @@ def list_batasan_wilayah_geojson(
     )
 
 
+# ── Cache in-memory utk batas wilayah kabupaten/kota ─────────────
+# ST_Union() men-dissolve ratusan polygon desa/kecamatan jadi satu
+# garis batas per kabupaten/kota — query ini BERAT dan lambat kalau
+# dijalankan ulang di setiap request (itu sebabnya frontend selalu
+# kena timeout & jatuh ke fallback). Datanya sendiri nyaris tidak
+# pernah berubah, jadi dihitung sekali lalu disimpan di memory;
+# request berikutnya tinggal ambil dari cache (instan).
+_batasan_kabupaten_cache = {"data": None, "ts": 0.0}
+_BATASAN_CACHE_TTL       = 60 * 60 * 24  # 24 jam
+_batasan_cache_lock      = threading.Lock()
+
+
+def _compute_batasan_kabupaten_cache(db: Session):
+    data = get_batasan_wilayah_kabupaten_geojson(db)
+    _batasan_kabupaten_cache["data"] = data
+    _batasan_kabupaten_cache["ts"]   = time.time()
+    return data
+
+
+def warm_batasan_kabupaten_cache():
+    """Precompute cache saat server startup, supaya user pertama yang
+    buka halaman Peta tidak ikut menunggu ST_Union yang berat."""
+    db = SessionLocal()
+    try:
+        with _batasan_cache_lock:
+            _compute_batasan_kabupaten_cache(db)
+        print("[startup] cache batas wilayah kabupaten/kota siap")
+    except Exception as e:
+        print(f"[startup] gagal precompute batas wilayah kabupaten/kota: {e}")
+    finally:
+        db.close()
+
+
 @router.get("/batasan-wilayah/kabupaten/geojson")
 def batasan_wilayah_kabupaten_geojson(db: Session = Depends(get_db)):
     """
@@ -309,8 +344,24 @@ def batasan_wilayah_kabupaten_geojson(db: Session = Depends(get_db)):
     desa/kecamatan) — dipakai layer "Batas Wilayah" di halaman Peta,
     supaya cuma ~27 garis batas kabupaten/kota yang digambar, bukan
     ratusan/ribuan polygon desa dari /batasan-wilayah/geojson.
+
+    Hasil ST_Union di-cache di memory (lihat warm_batasan_kabupaten_cache)
+    supaya endpoint ini instan setelah pertama kali dihitung, bukan
+    men-dissolve ulang setiap request.
     """
-    return get_batasan_wilayah_kabupaten_geojson(db)
+    cached = _batasan_kabupaten_cache["data"]
+    fresh  = cached is not None and (time.time() - _batasan_kabupaten_cache["ts"]) < _BATASAN_CACHE_TTL
+    if fresh:
+        return cached
+
+    with _batasan_cache_lock:
+        # Cek ulang di dalam lock — kalau thread lain sudah selesai
+        # hitung ulang selagi kita nunggu lock, langsung pakai itu.
+        cached = _batasan_kabupaten_cache["data"]
+        fresh  = cached is not None and (time.time() - _batasan_kabupaten_cache["ts"]) < _BATASAN_CACHE_TTL
+        if fresh:
+            return cached
+        return _compute_batasan_kabupaten_cache(db)
 
 
 @router.get("/batasan-wilayah/{boundary_id}", response_model=BatasanWilayahResponse)
