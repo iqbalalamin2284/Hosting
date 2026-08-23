@@ -39,6 +39,7 @@ from crud import (
     get_school_by_npsn, get_school_by_id, get_schools, get_school_count,
     get_batasan_wilayah, get_batasan_wilayah_by_id,
     get_batasan_wilayah_geojson, get_batasan_wilayah_geojson_by_id,
+    get_batasan_wilayah_kabupaten_geojson,
     get_zonasi, get_zonasi_by_id, get_simulasi_ppdb, get_rekomendasi_sekolah,
     get_sekolah_dalam_radius,
     get_biaya, upsert_biaya,
@@ -299,6 +300,17 @@ def list_batasan_wilayah_geojson(
         kode_kecamatan=kode_kecamatan,
         kode_kabupaten=kode_kabupaten,
     )
+
+
+@router.get("/batasan-wilayah/kabupaten/geojson")
+def batasan_wilayah_kabupaten_geojson(db: Session = Depends(get_db)):
+    """
+    Batas wilayah per KABUPATEN/KOTA saja (union dari semua polygon
+    desa/kecamatan) — dipakai layer "Batas Wilayah" di halaman Peta,
+    supaya cuma ~27 garis batas kabupaten/kota yang digambar, bukan
+    ratusan/ribuan polygon desa dari /batasan-wilayah/geojson.
+    """
+    return get_batasan_wilayah_kabupaten_geojson(db)
 
 
 @router.get("/batasan-wilayah/{boundary_id}", response_model=BatasanWilayahResponse)
