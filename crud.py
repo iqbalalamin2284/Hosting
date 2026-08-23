@@ -565,7 +565,7 @@ def get_batasan_wilayah_outliers(db: Session):
     """
     query = text("""
         WITH simplified AS (
-            SELECT id, nama_kabupaten, nama_kecamatan, nama_desa, geom
+            SELECT boundary_id, nama_kabupaten, nama_kecamatan, nama_desa, geom
             FROM batasan_wilayah
             WHERE nama_kabupaten IS NOT NULL AND nama_kabupaten != ''
         ),
@@ -581,7 +581,7 @@ def get_batasan_wilayah_outliers(db: Session):
             ORDER BY nama_kabupaten, ST_Area(piece_geom) DESC
         )
         SELECT
-            s.id, s.nama_kabupaten, s.nama_kecamatan, s.nama_desa
+            s.boundary_id, s.nama_kabupaten, s.nama_kecamatan, s.nama_desa
         FROM simplified s
         JOIN main_body m ON m.nama_kabupaten = s.nama_kabupaten
         WHERE NOT ST_Intersects(s.geom, ST_Buffer(m.piece_geom, 0.01))
