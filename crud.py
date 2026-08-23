@@ -457,6 +457,44 @@ def get_batasan_wilayah_geojson_by_id(db: Session, boundary_id: int):
     """)
     return db.execute(query, {"boundary_id": boundary_id}).scalar()
 
+
+def get_batasan_wilayah_kabupaten_geojson(db: Session):
+    """
+    Batas wilayah level KABUPATEN/KOTA saja — union semua polygon
+    desa/kecamatan yang ada di `batasan_wilayah` jadi SATU garis batas
+    luar per kabupaten/kota (bukan ratusan polygon desa terpisah).
+
+    Dipakai utk layer "Batas Wilayah" di halaman Peta: klik satu
+    kabupaten/kota → tampilkan cuma garis batas kabupaten/kota itu saja.
+    ST_SimplifyPreserveTopology dipakai supaya payload GeoJSON tidak
+    kebesaran (ribuan vertex desa jadi disederhanakan, tapi bentuk garis
+    luar kabupaten/kota tetap valid/tidak pecah).
+    """
+    query = text("""
+        SELECT json_build_object(
+            'type', 'FeatureCollection',
+            'features', COALESCE(json_agg(
+                json_build_object(
+                    'type', 'Feature',
+                    'properties', json_build_object(
+                        'nama_kabupaten', nama_kabupaten
+                    ),
+                    'geometry', ST_AsGeoJSON(
+                        ST_SimplifyPreserveTopology(geom_union, 0.0005)
+                    )::json
+                )
+                ORDER BY nama_kabupaten
+            ), '[]'::json)
+        ) AS feature_collection
+        FROM (
+            SELECT nama_kabupaten, ST_Union(geom) AS geom_union
+            FROM batasan_wilayah
+            WHERE nama_kabupaten IS NOT NULL AND nama_kabupaten != ''
+            GROUP BY nama_kabupaten
+        ) dissolved
+    """)
+    return db.execute(query).scalar()
+
 # --- School CRUD ---
  
 def create_school(db: Session, data) -> "School":
