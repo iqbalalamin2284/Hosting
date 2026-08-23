@@ -474,8 +474,64 @@ def get_batasan_wilayah_kabupaten_geojson(db: Session):
     yang memanggil fungsi ini juga meng-cache hasilnya di memory,
     jadi query berat ini idealnya cuma jalan sekali (lihat
     warm_batasan_kabupaten_cache di api.py).
+
+    Data cleanup — PENTING: sejumlah baris desa/kelurahan di tabel ini
+    ternyata salah label `nama_kabupaten`-nya (misal ada desa yang
+    lokasinya di area Depok/Bogor tapi ke-tag "Bandung Barat", atau
+    desa yang jauh dari Ciamis tapi ke-tag "Ciamis"). Kalau langsung
+    di-union, hasilnya jadi bentuk pecah/nyasar yang nggak masuk akal
+    secara geografis (potongan kecil terpisah jauh dari badan utama
+    kabupaten/kota-nya).
+
+    Workaround di query ini: union dipecah per bagian (ST_Dump), lalu
+    bagian yang luasnya < 5% dari bagian TERBESAR dalam grup yang sama
+    dibuang sebelum di-union ulang jadi bentuk final. Kabupaten/kota
+    asli praktis selalu berupa satu badan utama yang menyambung — jadi
+    pecahan kecil yang terpisah jauh hampir pasti data nyasar, bukan
+    pulau/eksklave asli. Ini cuma menyembunyikan gejalanya di layer
+    peta; solusi permanennya tetap harus membersihkan/reklasifikasi
+    baris nama_kabupaten yang salah di tabel `batasan_wilayah` sendiri.
     """
     query = text("""
+        WITH simplified AS (
+            SELECT
+                nama_kabupaten,
+                ST_SimplifyPreserveTopology(geom, 0.0008) AS geom
+            FROM batasan_wilayah
+            WHERE nama_kabupaten IS NOT NULL AND nama_kabupaten != ''
+        ),
+        pieces AS (
+            SELECT
+                nama_kabupaten,
+                (ST_Dump(ST_Union(geom))).geom AS piece_geom
+            FROM simplified
+            GROUP BY nama_kabupaten
+        ),
+        pieces_area AS (
+            SELECT
+                nama_kabupaten,
+                piece_geom,
+                ST_Area(piece_geom) AS area
+            FROM pieces
+        ),
+        max_area AS (
+            SELECT nama_kabupaten, MAX(area) AS max_area
+            FROM pieces_area
+            GROUP BY nama_kabupaten
+        ),
+        kept AS (
+            -- Buang pecahan "nyasar": luasnya < 5% dari badan utama
+            -- (badan terbesar) di kabupaten/kota yang sama.
+            SELECT p.nama_kabupaten, p.piece_geom
+            FROM pieces_area p
+            JOIN max_area m ON m.nama_kabupaten = p.nama_kabupaten
+            WHERE p.area >= m.max_area * 0.05
+        ),
+        dissolved AS (
+            SELECT nama_kabupaten, ST_Union(piece_geom) AS geom_union
+            FROM kept
+            GROUP BY nama_kabupaten
+        )
         SELECT json_build_object(
             'type', 'FeatureCollection',
             'features', COALESCE(json_agg(
@@ -489,16 +545,50 @@ def get_batasan_wilayah_kabupaten_geojson(db: Session):
                 ORDER BY nama_kabupaten
             ), '[]'::json)
         ) AS feature_collection
-        FROM (
-            SELECT
-                nama_kabupaten,
-                ST_Union(ST_SimplifyPreserveTopology(geom, 0.0008)) AS geom_union
-            FROM batasan_wilayah
-            WHERE nama_kabupaten IS NOT NULL AND nama_kabupaten != ''
-            GROUP BY nama_kabupaten
-        ) dissolved
+        FROM dissolved
     """)
     return db.execute(query).scalar()
+
+
+def get_batasan_wilayah_outliers(db: Session):
+    """
+    DIAGNOSTIK — daftar baris desa/kelurahan di `batasan_wilayah` yang
+    kemungkinan SALAH LABEL nama_kabupaten: geometrinya sama sekali
+    tidak bersentuhan dengan badan utama (potongan terbesar) kabupaten/
+    kota yang sama.
+
+    Ini bukan dipakai frontend — dipanggil manual (lewat endpoint admin)
+    utk bantu cari baris mana yang perlu dikoreksi nama_kabupaten-nya
+    langsung di Supabase Table Editor, supaya
+    get_batasan_wilayah_kabupaten_geojson() di atas nggak perlu terus
+    mengandalkan filter "buang potongan kecil" sebagai tambal sulam.
+    """
+    query = text("""
+        WITH simplified AS (
+            SELECT id, nama_kabupaten, nama_kecamatan, nama_desa, geom
+            FROM batasan_wilayah
+            WHERE nama_kabupaten IS NOT NULL AND nama_kabupaten != ''
+        ),
+        pieces AS (
+            SELECT nama_kabupaten, (ST_Dump(ST_Union(geom))).geom AS piece_geom
+            FROM simplified
+            GROUP BY nama_kabupaten
+        ),
+        main_body AS (
+            -- badan utama = potongan terbesar hasil union per kabupaten/kota
+            SELECT DISTINCT ON (nama_kabupaten) nama_kabupaten, piece_geom
+            FROM pieces
+            ORDER BY nama_kabupaten, ST_Area(piece_geom) DESC
+        )
+        SELECT
+            s.id, s.nama_kabupaten, s.nama_kecamatan, s.nama_desa
+        FROM simplified s
+        JOIN main_body m ON m.nama_kabupaten = s.nama_kabupaten
+        WHERE NOT ST_Intersects(s.geom, ST_Buffer(m.piece_geom, 0.01))
+        ORDER BY s.nama_kabupaten, s.nama_desa
+    """)
+    rows = db.execute(query).mappings().all()
+    return [dict(r) for r in rows]
 
 # --- School CRUD ---
  
