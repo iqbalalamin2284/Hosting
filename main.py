@@ -2,7 +2,7 @@ import traceback
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from api import router
+from api import router, warm_batasan_kabupaten_cache
 from db import engine, Base
 
 Base.metadata.create_all(bind=engine)
@@ -16,6 +16,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Role", "X-User-Id"],
 )
+
+# ── Precompute cache batas wilayah kabupaten/kota (ST_Union berat) ──
+# Dijalankan di background thread supaya server tetap langsung nyala
+# & bisa terima request lain sambil dissolve geometry-nya jalan.
+@app.on_event("startup")
+def _startup_warm_caches():
+    import threading
+    threading.Thread(target=warm_batasan_kabupaten_cache, daemon=True).start()
 
 # ── TEMPORARY: debug handler — REMOVE after the bug is found ──────
 # Surfaces the real exception + traceback in the JSON response instead
