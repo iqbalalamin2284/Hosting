@@ -337,13 +337,23 @@ def warm_batasan_kabupaten_cache():
         db.close()
 
 
-@router.get("/batasan-wilayah/kabupaten/geojson")
+@router.get("/batasan-wilayah-kabupaten/geojson")
 def batasan_wilayah_kabupaten_geojson(db: Session = Depends(get_db)):
     """
     Batas wilayah per KABUPATEN/KOTA saja (union dari semua polygon
     desa/kecamatan) — dipakai layer "Batas Wilayah" di halaman Peta,
     supaya cuma ~27 garis batas kabupaten/kota yang digambar, bukan
     ratusan/ribuan polygon desa dari /batasan-wilayah/geojson.
+
+    PENTING soal path: sengaja dipisah dari prefix /batasan-wilayah/...
+    (bukan /batasan-wilayah/kabupaten/geojson) supaya TIDAK PERNAH
+    bentrok dengan /batasan-wilayah/{boundary_id}/geojson di bawah.
+    Keduanya sama-sama "dua segmen setelah /batasan-wilayah", jadi kalau
+    urutan registrasi route ini pernah berubah/salah taruh, request ke
+    sini bisa ketangkep {boundary_id}="kabupaten" duluan → gagal parse
+    ke int → 422 (ini persis yang kejadian sebelumnya). Prefix beda
+    total (/batasan-wilayah-kabupaten) membuat konflik itu mustahil
+    terlepas dari urutan route di file ini.
 
     Hasil ST_Union di-cache di memory (lihat warm_batasan_kabupaten_cache)
     supaya endpoint ini instan setelah pertama kali dihitung, bukan
