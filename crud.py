@@ -466,9 +466,14 @@ def get_batasan_wilayah_kabupaten_geojson(db: Session):
 
     Dipakai utk layer "Batas Wilayah" di halaman Peta: klik satu
     kabupaten/kota → tampilkan cuma garis batas kabupaten/kota itu saja.
-    ST_SimplifyPreserveTopology dipakai supaya payload GeoJSON tidak
-    kebesaran (ribuan vertex desa jadi disederhanakan, tapi bentuk garis
-    luar kabupaten/kota tetap valid/tidak pecah).
+
+    Performa: geometry disederhanakan (ST_SimplifyPreserveTopology)
+    SEBELUM di-union, bukan sesudah — union atas polygon desa yang
+    sudah "diringankan" jauh lebih cepat daripada union geometry
+    full-resolution lalu baru disederhanakan belakangan. Endpoint
+    yang memanggil fungsi ini juga meng-cache hasilnya di memory,
+    jadi query berat ini idealnya cuma jalan sekali (lihat
+    warm_batasan_kabupaten_cache di api.py).
     """
     query = text("""
         SELECT json_build_object(
@@ -479,15 +484,15 @@ def get_batasan_wilayah_kabupaten_geojson(db: Session):
                     'properties', json_build_object(
                         'nama_kabupaten', nama_kabupaten
                     ),
-                    'geometry', ST_AsGeoJSON(
-                        ST_SimplifyPreserveTopology(geom_union, 0.0005)
-                    )::json
+                    'geometry', ST_AsGeoJSON(geom_union)::json
                 )
                 ORDER BY nama_kabupaten
             ), '[]'::json)
         ) AS feature_collection
         FROM (
-            SELECT nama_kabupaten, ST_Union(geom) AS geom_union
+            SELECT
+                nama_kabupaten,
+                ST_Union(ST_SimplifyPreserveTopology(geom, 0.0008)) AS geom_union
             FROM batasan_wilayah
             WHERE nama_kabupaten IS NOT NULL AND nama_kabupaten != ''
             GROUP BY nama_kabupaten
